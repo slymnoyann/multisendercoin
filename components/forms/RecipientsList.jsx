@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useMemo } from "react"
 import { Plus, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -9,6 +9,8 @@ import { RecipientInput } from "./RecipientInput"
 import { EmptyState } from "@/components/feedback/EmptyState"
 import { Users } from "lucide-react"
 import { CSVUpload } from "@/components/features/CSVUpload"
+import { DuplicateChecker } from "@/components/features/DuplicateChecker"
+import { RecipientCounter } from "@/components/features/RecipientCounter"
 import { useToast } from "@/lib/use-toast"
 
 export function RecipientsList({
@@ -127,19 +129,27 @@ export function RecipientsList({
         />
       ) : (
         <div className="space-y-3">
-          {rows.map((row, i) => (
-            <RecipientInput
-              key={i}
-              index={i}
-              address={row.address}
-              amount={row.amount}
-              mode={mode}
-              onAddressChange={(value) => updateAddress(i, value)}
-              onAmountChange={(value) => updateAmount(i, value)}
-              onRemove={() => remove(i)}
-              decimals={decimals}
-            />
-          ))}
+          <RecipientCounter
+            recipients={rows.map((r) => r.address)}
+            mode={mode}
+            amounts={rows.map((r) => r.amount)}
+          />
+          <DuplicateChecker recipients={rows.map((r) => r.address)} />
+          <div className="space-y-3">
+            {rows.map((row, i) => (
+              <RecipientInput
+                key={i}
+                index={i}
+                address={row.address}
+                amount={row.amount}
+                mode={mode}
+                onAddressChange={(value) => updateAddress(i, value)}
+                onAmountChange={(value) => updateAmount(i, value)}
+                onRemove={() => remove(i)}
+                decimals={decimals}
+              />
+            ))}
+          </div>
         </div>
       )}
 

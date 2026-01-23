@@ -22,12 +22,15 @@ import { TransactionSummary } from "@/components/features/TransactionSummary";
 import { TransactionHistory } from "@/components/features/TransactionHistory";
 import { GasEstimate } from "@/components/features/GasEstimate";
 import { TransactionFlow } from "@/components/features/TransactionFlow";
+import { AmountValidator } from "@/components/features/AmountValidator";
+import { ProgressBar } from "@/components/feedback/ProgressBar";
+import { ConfirmationDialog } from "@/components/feedback/ConfirmationDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingState } from "@/components/feedback/LoadingState";
 import { useToast } from "@/lib/use-toast";
-import { Zap, Shield, Coins, Activity, Wallet } from "lucide-react";
+import { Zap, Shield, Coins, Activity, Wallet, CheckCircle2 } from "lucide-react";
 
 const MULTI_SENDER = process.env.NEXT_PUBLIC_MULTI_SENDER_ADDRESS || "";
 
@@ -38,6 +41,9 @@ export default function Home() {
   const [rows, setRows] = useState([{ address: "", amount: "" }]);
   const [transactionHistory, setTransactionHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
+  const [transactionProgress, setTransactionProgress] = useState(0);
   const { toast } = useToast();
 
   const { address, isConnected } = useAccount();
@@ -127,42 +133,74 @@ export default function Home() {
   // Effects
   useEffect(() => {
     if (approveConfirming === false && approveData) {
+      setTransactionProgress(100);
       refetchAllowance?.();
       toast({
         title: "Approved!",
         description: "Token spending approved successfully",
         variant: "success",
       });
+      setTimeout(() => setTransactionProgress(0), 2000);
+    } else if (approveConfirming && approveData) {
+      setTransactionProgress(60);
     }
   }, [approveConfirming, approveData, refetchAllowance, toast]);
 
   const decimalsNum = decimals != null ? Number(decimals) : 18;
 
-  const { recipients, amounts } = useMemo(() => {
+  const { recipients, amounts, hasDuplicates } = useMemo(() => {
     if (mode === "equal") {
       const rec = rows.map((r) => r.address).filter((a) => isAddress(a));
-      if (!amountPer || isNaN(Number(amountPer)) || rec.length === 0) return { recipients: [], amounts: [] };
+      // Check for duplicates
+      const seen = new Set();
+      const duplicates = new Set();
+      rec.forEach((addr) => {
+        const normalized = addr.toLowerCase();
+        if (seen.has(normalized)) {
+          duplicates.add(normalized);
+        } else {
+          seen.add(normalized);
+        }
+      });
+      
+      if (!amountPer || isNaN(Number(amountPer)) || rec.length === 0) {
+        return { recipients: [], amounts: [], hasDuplicates: duplicates.size > 0 };
+      }
       try {
         const a = parseUnits(amountPer, decimalsNum);
-        return { recipients: rec, amounts: rec.map(() => a) };
+        return { recipients: rec, amounts: rec.map(() => a), hasDuplicates: duplicates.size > 0 };
       } catch {
-        return { recipients: [], amounts: [] };
+        return { recipients: [], amounts: [], hasDuplicates: duplicates.size > 0 };
       }
     }
     const valid = rows.filter(
       (r) => isAddress(r.address) && r.amount != null && r.amount !== "" && !isNaN(Number(r.amount))
     );
+    
+    // Check for duplicates
+    const seen = new Set();
+    const duplicates = new Set();
+    valid.forEach((r) => {
+      const normalized = r.address.toLowerCase();
+      if (seen.has(normalized)) {
+        duplicates.add(normalized);
+      } else {
+        seen.add(normalized);
+      }
+    });
+    
     const amt = [];
     for (const r of valid) {
       try {
         amt.push(parseUnits(r.amount, decimalsNum));
       } catch {
-        return { recipients: [], amounts: [] };
+        return { recipients: [], amounts: [], hasDuplicates: duplicates.size > 0 };
       }
     }
     return {
       recipients: valid.map((r) => r.address),
       amounts: amt,
+      hasDuplicates: duplicates.size > 0,
     };
   }, [mode, rows, amountPer, decimalsNum]);
 
@@ -255,6 +293,7 @@ export default function Home() {
 
   const doApprove = async () => {
     if (!token.address || !MULTI_SENDER || totalWei === 0n) return;
+    setTransactionProgress(10);
     try {
       approve({
         address: token.address,
@@ -262,12 +301,14 @@ export default function Home() {
         functionName: "approve",
         args: [MULTI_SENDER, totalWei + estimatedFee],
       });
+      setTransactionProgress(30);
       toast({
         title: "Approving...",
         description: "Please confirm the transaction in your wallet",
         variant: "info",
       });
     } catch (error) {
+      setTransactionProgress(0);
       toast({
         title: "Error",
         description: error.message || "Failed to approve token spending",
@@ -276,8 +317,22 @@ export default function Home() {
     }
   };
 
+  const handleSendClick = () => {
+    if (hasDuplicates) {
+      toast({
+        title: "Duplicate Addresses",
+        description: "Please remove duplicate addresses before sending",
+        variant: "destructive",
+      });
+      return;
+    }
+    setPendingAction(() => doSend);
+    setShowConfirmDialog(true);
+  };
+
   const doSend = async () => {
     if (!MULTI_SENDER || recipients.length === 0) return;
+    setTransactionProgress(10);
     try {
       if (token.isNative) {
         const value = totalWei + estimatedFee;
@@ -315,12 +370,14 @@ export default function Home() {
           });
         }
       }
+      setTransactionProgress(30);
       toast({
         title: "Sending...",
         description: "Please confirm the transaction in your wallet",
         variant: "info",
       });
     } catch (error) {
+      setTransactionProgress(0);
       toast({
         title: "Error",
         description: error.message || "Failed to send transaction",
@@ -351,6 +408,7 @@ export default function Home() {
 
   useEffect(() => {
     if (sendConfirming === false && sendData) {
+      setTransactionProgress(100);
       toast({
         title: "Success!",
         description: "Transaction completed successfully",
@@ -374,6 +432,9 @@ export default function Home() {
       setTransactionHistory(prev => [newTransaction, ...prev.slice(0, 9)]);
       setRows([{ address: "", amount: "" }]);
       setAmountPer("");
+      setTimeout(() => setTransactionProgress(0), 2000);
+    } else if (sendConfirming && sendData) {
+      setTransactionProgress(60);
     }
   }, [sendConfirming, sendData, token, symbol, recipients, totalWei, estimatedFee, decimalsNum, mode, toast]);
 
@@ -463,11 +524,40 @@ export default function Home() {
                         gasEstimate={token.isNative ? nativeGasEstimate : erc20GasEstimate}
                       />
 
+                      <AmountValidator
+                        amounts={amounts}
+                        mode={mode}
+                        amountPer={amountPer}
+                        totalAmount={totalWei + estimatedFee}
+                        balance={balance}
+                        decimals={decimalsNum}
+                        symbol={token.isNative ? "ETH" : symbol}
+                      />
+
+                      {transactionProgress > 0 && (
+                        <div className="space-y-2">
+                          <ProgressBar progress={transactionProgress} />
+                          <p className="text-xs text-center text-muted-foreground">
+                            {transactionProgress < 30 ? "Preparing transaction..." :
+                             transactionProgress < 60 ? "Waiting for confirmation..." :
+                             transactionProgress < 100 ? "Processing..." : "Complete!"}
+                          </p>
+                        </div>
+                      )}
+
                       {(!token.isNative && needsApproval) && (
                         <TransactionFlow
                           currentStep={approvePending || approveConfirming ? "approve" : "send"}
                           isProcessing={approvePending || approveConfirming}
                         />
+                      )}
+
+                      {hasDuplicates && (
+                        <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+                          <p className="text-sm font-medium text-yellow-500">
+                            ⚠️ Duplicate addresses detected. Please remove duplicates before sending.
+                          </p>
+                        </div>
                       )}
 
                       {!hasEnoughBalance && (
@@ -496,12 +586,13 @@ export default function Home() {
                           </Button>
                         )}
                         <Button
-                          onClick={doSend}
+                          onClick={handleSendClick}
                           disabled={
                             sendPending ||
                             sendConfirming ||
                             (!token.isNative && needsApproval && (allowance == null || allowance < totalWei)) ||
-                            !hasEnoughBalance
+                            !hasEnoughBalance ||
+                            hasDuplicates
                           }
                           className="flex-1"
                           variant="gradient"
@@ -541,6 +632,21 @@ export default function Home() {
         </Container>
       </main>
       <Footer />
+      
+      <ConfirmationDialog
+        open={showConfirmDialog}
+        onOpenChange={setShowConfirmDialog}
+        title="Confirm Transaction"
+        description={`You are about to send ${formatUnits(totalWei, decimalsNum)} ${token.isNative ? "ETH" : symbol || "tokens"} to ${recipients.length} recipient${recipients.length > 1 ? "s" : ""}. This action cannot be undone.`}
+        confirmText="Confirm & Send"
+        cancelText="Cancel"
+        onConfirm={() => {
+          if (pendingAction) {
+            pendingAction();
+            setPendingAction(null);
+          }
+        }}
+      />
     </div>
   );
 }
